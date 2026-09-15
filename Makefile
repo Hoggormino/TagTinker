@@ -41,6 +41,11 @@ NPM      ?= npm
 NPX      ?= npx
 IDF_PATH ?= $(HOME)/esp/esp-idf
 export IDF_PATH
+# Same chip the CI job builds for. Exporting it makes ESP-IDF refuse a stale
+# sdkconfig that was generated for a different target instead of silently
+# building it (sdkconfig.defaults pins the same value for clean builds).
+IDF_TARGET ?= esp32s2
+export IDF_TARGET
 
 # ESP-IDF's export.sh detects `python3` from PATH and expects a virtualenv named
 # after that interpreter (idf5.2_py3.14_env for Python 3.14). If install.sh ran
@@ -74,12 +79,12 @@ IDF_ENV = idf_log=$$(mktemp) \
        || { cat "$$idf_log"; rm -f "$$idf_log"; \
             echo "error: sourcing $(IDF_PATH)/export.sh failed." >&2; \
             echo "       Fix: run '$(IDF_PATH)/install.sh esp32s2', or - if 'python3' on PATH is not the interpreter" >&2; \
-            echo "       install.sh used - pass IDF_PYTHON_ENV_PATH=~/.espressif/python_env/idf5.2_pyX.Y_env" >&2; \
+            echo "       install.sh used - pass IDF_PYTHON_ENV_PATH=$(IDF_TOOLS_PATH)/python_env/idf5.2_pyX.Y_env" >&2; \
             exit 1; }; } \
   && rm -f "$$idf_log"
 
 .PHONY: help setup build-fap build-worker build-esp build-all launch flash-esp \
-        serve-web lint check-worker clean distclean check-esp-env worker-deps
+        serve-web lint check-worker clean distclean check-esp-env check-root worker-deps
 
 # --- Help -------------------------------------------------------------------
 help: ## Show this help
@@ -104,6 +109,11 @@ setup: ## One-time: create .venv with ufbt, fetch the Flipper SDK, npm ci the wo
 # Install worker dependencies only when node_modules is missing.
 worker-deps:
 	@test -d $(WORKER_DIR)/node_modules || { echo ">> $(WORKER_DIR)/node_modules missing, running npm ci"; cd $(WORKER_DIR) && $(NPM) ci; }
+
+# clean/distclean delete cwd-relative paths; refuse to run anywhere but the repo root.
+check-root:
+	@test -f application.fam -a -d $(ESP_DIR) -a -d $(WORKER_DIR) || { \
+	  echo "error: run make from the TagTinker repository root (or use make -C <repo>)" >&2; exit 1; }
 
 # Fail early with a readable message when ESP-IDF is not where we expect it.
 check-esp-env:
@@ -130,10 +140,10 @@ build-esp: check-esp-env ## Build the ESP32-S2 WiFi devboard firmware (ESP-IDF v
 build-all: build-fap build-worker build-esp ## Build the FAP, the worker and the ESP32 firmware
 
 # --- Run / flash ------------------------------------------------------------
-launch: ## Build, install and run the FAP on the USB-connected Flipper (port auto-detected)
+launch: build-fap ## Build, install and run the FAP on the USB-connected Flipper (port auto-detected)
 	$(UFBT) launch
 
-flash-esp: check-esp-env ## Build and flash the ESP32-S2 firmware (ESP_PORT=/dev/... to pick a port)
+flash-esp: check-esp-env build-esp ## Build and flash the ESP32-S2 firmware (ESP_PORT=/dev/... to pick a port)
 	@echo ">> idf.py -C $(ESP_DIR) $(IDF_PORT_FLAG) flash   (IDF_PATH=$(IDF_PATH))"
 	@$(IDF_ENV) && idf.py -C $(ESP_DIR) $(IDF_PORT_FLAG) flash
 
@@ -152,10 +162,10 @@ check-worker: worker-deps ## Type-check the worker only (npx tsc --noEmit)
 	cd $(WORKER_DIR) && $(NPX) tsc --noEmit
 
 # --- Cleanup ----------------------------------------------------------------
-clean: ## Remove build outputs only (dist/, worker dist + .wrangler, ESP build/, generated .clang-format)
+clean: check-root ## Remove build outputs only (dist/, worker dist + .wrangler, ESP build/, generated .clang-format)
 	rm -rf dist $(WORKER_DIR)/dist $(WORKER_DIR)/.wrangler $(ESP_DIR)/build
 	rm -f .clang-format .vscode/compile_commands.json
 
-distclean: clean ## clean + remove .venv, worker node_modules and ESP sdkconfig (re-run 'make setup' afterwards)
+distclean: check-root clean ## clean + remove .venv, worker node_modules and ESP sdkconfig (re-run 'make setup' afterwards)
 	@echo "!! distclean: removing $(VENV)/, $(WORKER_DIR)/node_modules/ and $(ESP_DIR)/sdkconfig"
 	rm -rf $(VENV) $(WORKER_DIR)/node_modules $(ESP_DIR)/sdkconfig
