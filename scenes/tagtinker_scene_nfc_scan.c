@@ -1,44 +1,124 @@
 /*
- * NFC Scan scene — scan an ESL NFC tag to fill barcode
+ * NFC Scan scene — scan a Pricer ESL NFC tag to fill the barcode
+ *
+ * The scanner keeps running after a tag is rejected, so an unsupported tag no
+ * longer ends the session: present another one and it is read straight away.
+ * Tags are de-duplicated by UID so a tag left resting on the reader does not
+ * re-trigger its message every poll.
  */
 
 #include "../tagtinker_app.h"
+#include <string.h>
 
+/* Kept above the target-menu submenu indices: that scene treats any custom
+ * event below target_count as a target selection, so a late event arriving
+ * after Back must not look like one. */
 enum {
-    NfcScanEventSuccess = 1,
-    NfcScanEventNotEsl = 2,
+    NfcScanEventSuccess = 100,
+    NfcScanEventNotEsl = 101,
+    NfcScanEventVusion = 102,
+    NfcScanEventUnreadable = 103,
+    NfcScanEventRearm = 104,
 };
+
+static void nfc_scan_show_prompt(TagTinkerApp* app) {
+    popup_reset(app->popup);
+    popup_disable_timeout(app->popup);
+    popup_set_callback(app->popup, NULL);
+    popup_set_header(app->popup, "Scan NFC Tag", 64, 10, AlignCenter, AlignTop);
+    popup_set_text(
+        app->popup, "Hold ESL tag\nto Flipper back", 64, 32, AlignCenter, AlignCenter);
+    view_dispatcher_switch_to_view(app->view_dispatcher, TagTinkerViewPopup);
+}
+
+static void nfc_scan_popup_timeout_cb(void* ctx) {
+    TagTinkerApp* app = ctx;
+    /* Runs on the popup's timer; hand the work back to the scene's event loop. */
+    view_dispatcher_send_custom_event(app->view_dispatcher, NfcScanEventRearm);
+}
+
+/* Show a transient message. When rearm is set the scanner is still running, so
+ * the prompt comes back by itself; otherwise the message stays until Back. */
+static void
+    nfc_scan_show_message(TagTinkerApp* app, const char* header, const char* text, bool rearm) {
+    popup_reset(app->popup);
+    popup_set_header(app->popup, header, 64, 20, AlignCenter, AlignCenter);
+    popup_set_text(app->popup, text, 64, 38, AlignCenter, AlignCenter);
+    if(rearm) {
+        popup_set_context(app->popup, app);
+        popup_set_callback(app->popup, nfc_scan_popup_timeout_cb);
+        popup_set_timeout(app->popup, 2500);
+        popup_enable_timeout(app->popup);
+    } else {
+        popup_set_callback(app->popup, NULL);
+        popup_disable_timeout(app->popup);
+    }
+    view_dispatcher_switch_to_view(app->view_dispatcher, TagTinkerViewPopup);
+}
 
 static int32_t nfc_scan_thread(void* ctx) {
     TagTinkerApp* app = ctx;
+    uint8_t last_uid[10];
+    uint8_t last_uid_len = 0;
 
     while(app->nfc_scanning) {
         MfUltralightData* mfu_data = mf_ultralight_alloc();
         MfUltralightError err =
             mf_ultralight_poller_sync_read_card(app->nfc, mfu_data, NULL);
 
-        if(err == MfUltralightErrorNone) {
-            char barcode[18];
-            bool decoded = tagtinker_nfc_decode_barcode(mfu_data, barcode);
+        if(!app->nfc_scanning) {
             mf_ultralight_free(mfu_data);
+            break;
+        }
 
-            if(!app->nfc_scanning) return 0;
+        if(err != MfUltralightErrorNone) {
+            /* Nothing in the field: forget the last tag so it can be re-read. */
+            last_uid_len = 0;
+            mf_ultralight_free(mfu_data);
+            furi_delay_ms(100);
+            continue;
+        }
 
-            if(decoded) {
-                memcpy(app->barcode, barcode, TAGTINKER_BC_LEN);
-                app->barcode[TAGTINKER_BC_LEN] = '\0';
-                view_dispatcher_send_custom_event(
-                    app->view_dispatcher, NfcScanEventSuccess);
-            } else {
-                view_dispatcher_send_custom_event(
-                    app->view_dispatcher, NfcScanEventNotEsl);
-            }
-            return 0;
+        uint8_t uid_len = mfu_data->iso14443_3a_data->uid_len;
+        if(uid_len > sizeof(last_uid)) uid_len = sizeof(last_uid);
+        const uint8_t* uid = mfu_data->iso14443_3a_data->uid;
+
+        if(uid_len > 0 && uid_len == last_uid_len && memcmp(uid, last_uid, uid_len) == 0) {
+            /* Same tag still resting on the reader; do not announce it again. */
+            mf_ultralight_free(mfu_data);
+            furi_delay_ms(100);
+            continue;
+        }
+        memcpy(last_uid, uid, uid_len);
+        last_uid_len = uid_len;
+
+        char url[TAGTINKER_NFC_URL_LEN];
+        char barcode[18];
+        bool have_url = tagtinker_nfc_extract_url(mfu_data, url, sizeof(url));
+        uint32_t event;
+
+        if(mfu_data->pages_read == 0) {
+            /* Chip answered but no page was readable (not an Ultralight/NTAG). */
+            event = NfcScanEventUnreadable;
+        } else if(have_url && tagtinker_nfc_decode_url(url, barcode)) {
+            memcpy(app->barcode, barcode, TAGTINKER_BC_LEN);
+            app->barcode[TAGTINKER_BC_LEN] = '\0';
+            event = NfcScanEventSuccess;
+        } else if(have_url && strstr(url, "imagotag") != NULL) {
+            event = NfcScanEventVusion;
+        } else {
+            event = NfcScanEventNotEsl;
         }
 
         mf_ultralight_free(mfu_data);
 
         if(!app->nfc_scanning) break;
+        view_dispatcher_send_custom_event(app->view_dispatcher, event);
+
+        /* On success the scene moves on; stop polling so the field is not left
+         * running underneath the next scene. */
+        if(event == NfcScanEventSuccess) return 0;
+
         furi_delay_ms(100);
     }
 
@@ -48,12 +128,7 @@ static int32_t nfc_scan_thread(void* ctx) {
 void tagtinker_scene_nfc_scan_on_enter(void* ctx) {
     TagTinkerApp* app = ctx;
 
-    popup_reset(app->popup);
-    popup_set_header(app->popup, "Scan NFC Tag", 64, 10, AlignCenter, AlignTop);
-    popup_set_text(
-        app->popup, "Hold ESL tag\nto Flipper back", 64, 32, AlignCenter, AlignCenter);
-
-    view_dispatcher_switch_to_view(app->view_dispatcher, TagTinkerViewPopup);
+    nfc_scan_show_prompt(app);
 
     notification_message(app->notifications, &sequence_blink_start_cyan);
 
@@ -74,15 +149,10 @@ bool tagtinker_scene_nfc_scan_on_event(void* ctx, SceneManagerEvent event) {
         int8_t idx = tagtinker_ensure_target(app, app->barcode);
 
         if(idx < 0) {
-            popup_reset(app->popup);
-            popup_set_header(
-                app->popup, "Decode Error", 64, 20, AlignCenter, AlignCenter);
-            popup_set_text(
-                app->popup, "Tag read but\nbarcode invalid", 64, 36, AlignCenter, AlignCenter);
-            popup_set_timeout(app->popup, 2000);
-            popup_enable_timeout(app->popup);
-            popup_set_callback(app->popup, NULL);
-            view_dispatcher_switch_to_view(app->view_dispatcher, TagTinkerViewPopup);
+            /* The barcode came out of the decoder, so it always parses; a
+             * failure here means there is no free target slot left. */
+            nfc_scan_show_message(
+                app, "Target list full", "Delete a target\nand scan again", false);
             return true;
         }
 
@@ -102,16 +172,25 @@ bool tagtinker_scene_nfc_scan_on_event(void* ctx, SceneManagerEvent event) {
         return true;
     }
 
+    if(event.event == NfcScanEventVusion) {
+        /* SES-imagotag VUSION labels are driven by a 2.4 GHz radio and have no
+         * IR receiver, so they cannot be targeted by this app at all. */
+        nfc_scan_show_message(app, "VUSION tag", "SES-imagotag uses\nradio, not IR", true);
+        return true;
+    }
+
     if(event.event == NfcScanEventNotEsl) {
-        popup_reset(app->popup);
-        popup_set_header(
-            app->popup, "Not an ESL tag", 64, 20, AlignCenter, AlignCenter);
-        popup_set_text(
-            app->popup, "Tag detected but\nno valid ESL data", 64, 36, AlignCenter, AlignCenter);
-        popup_set_timeout(app->popup, 2000);
-        popup_enable_timeout(app->popup);
-        popup_set_callback(app->popup, NULL);
-        view_dispatcher_switch_to_view(app->view_dispatcher, TagTinkerViewPopup);
+        nfc_scan_show_message(app, "Not a Pricer tag", "No Pricer ESL\ndata on tag", true);
+        return true;
+    }
+
+    if(event.event == NfcScanEventUnreadable) {
+        nfc_scan_show_message(app, "Unsupported chip", "Could not read\nthis NFC chip", true);
+        return true;
+    }
+
+    if(event.event == NfcScanEventRearm) {
+        nfc_scan_show_prompt(app);
         return true;
     }
 
@@ -131,4 +210,6 @@ void tagtinker_scene_nfc_scan_on_exit(void* ctx) {
 
     notification_message(app->notifications, &sequence_blink_stop);
     popup_reset(app->popup);
+    popup_disable_timeout(app->popup);
+    popup_set_callback(app->popup, NULL);
 }
