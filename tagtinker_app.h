@@ -139,6 +139,9 @@ struct TagTinkerApp {
     Nfc* nfc;
     FuriThread* nfc_thread;
     volatile bool nfc_scanning;
+    /* Vendor of the last recognised non-Pricer tag. Points into a static const
+     * table, so the scan thread can publish it without copying or freeing. */
+    const TagTinkerNfcVendorEntry* nfc_vendor;
 
     /* Broadcast settings */
     uint8_t broadcast_type;

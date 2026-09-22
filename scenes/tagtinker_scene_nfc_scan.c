@@ -16,7 +16,7 @@
 enum {
     NfcScanEventSuccess = 100,
     NfcScanEventNotEsl = 101,
-    NfcScanEventVusion = 102,
+    NfcScanEventVendor = 102,
     NfcScanEventUnreadable = 103,
     NfcScanEventRearm = 104,
 };
@@ -94,18 +94,27 @@ static int32_t nfc_scan_thread(void* ctx) {
 
         char url[TAGTINKER_NFC_URL_LEN];
         char barcode[18];
-        bool have_url = tagtinker_nfc_extract_url(mfu_data, url, sizeof(url));
+        bool truncated = false;
+        bool have_url = tagtinker_nfc_extract_url(mfu_data, url, sizeof(url), &truncated);
+
+        /* A truncated URL has lost the tail the Pricer id lives in, but it
+         * still carries its host, so a vendor can be named either way. */
+        const TagTinkerNfcVendorEntry* vendor =
+            have_url ? tagtinker_nfc_identify_vendor(url) : NULL;
         uint32_t event;
 
         if(mfu_data->pages_read == 0) {
             /* Chip answered but no page was readable (not an Ultralight/NTAG). */
             event = NfcScanEventUnreadable;
-        } else if(have_url && tagtinker_nfc_decode_url(url, barcode)) {
+        } else if(have_url && !truncated && tagtinker_nfc_decode_url(url, barcode)) {
             memcpy(app->barcode, barcode, TAGTINKER_BC_LEN);
             app->barcode[TAGTINKER_BC_LEN] = '\0';
             event = NfcScanEventSuccess;
-        } else if(have_url && strstr(url, "imagotag") != NULL) {
-            event = NfcScanEventVusion;
+        } else if(vendor) {
+            /* The entry points into a static const table, so publishing it for
+             * the scene thread needs no copy and no lifetime handling. */
+            app->nfc_vendor = vendor;
+            event = NfcScanEventVendor;
         } else {
             event = NfcScanEventNotEsl;
         }
@@ -133,6 +142,7 @@ void tagtinker_scene_nfc_scan_on_enter(void* ctx) {
     notification_message(app->notifications, &sequence_blink_start_cyan);
 
     app->nfc = nfc_alloc();
+    app->nfc_vendor = NULL;
     app->nfc_scanning = true;
 
     furi_thread_set_callback(app->nfc_thread, nfc_scan_thread);
@@ -172,10 +182,15 @@ bool tagtinker_scene_nfc_scan_on_event(void* ctx, SceneManagerEvent event) {
         return true;
     }
 
-    if(event.event == NfcScanEventVusion) {
-        /* SES-imagotag VUSION labels are driven by a 2.4 GHz radio and have no
-         * IR receiver, so they cannot be targeted by this app at all. */
-        nfc_scan_show_message(app, "VUSION tag", "SES-imagotag uses\nradio, not IR", true);
+    if(event.event == NfcScanEventVendor) {
+        /* A recognised tag from another ESL vendor. Naming it is all this app
+         * can do: none of them has an IR receiver, so none can be targeted. */
+        const TagTinkerNfcVendorEntry* vendor = app->nfc_vendor;
+        if(vendor) {
+            nfc_scan_show_message(app, vendor->name, vendor->reason, true);
+        } else {
+            nfc_scan_show_message(app, "Other ESL tag", "Not a Pricer tag", true);
+        }
         return true;
     }
 

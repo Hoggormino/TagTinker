@@ -115,7 +115,12 @@ static bool find_ndef_tlv(const MfUltralightData* mfu, uint32_t* value_start, ui
     return false;
 }
 
-bool tagtinker_nfc_extract_url(const MfUltralightData* mfu, char* url, size_t url_size) {
+bool tagtinker_nfc_extract_url(
+    const MfUltralightData* mfu,
+    char* url,
+    size_t url_size,
+    bool* truncated) {
+    if(truncated) *truncated = false;
     if(!mfu || !url || url_size == 0) return false;
     url[0] = '\0';
 
@@ -154,13 +159,97 @@ bool tagtinker_nfc_extract_url(const MfUltralightData* mfu, char* url, size_t ur
     size_t out = 0;
     for(uint32_t i = 1; i < payload_len; i++) {
         uint8_t c = 0;
-        if(!tlv_byte(mfu, offset + i, &c)) break;
+        if(!tlv_byte(mfu, offset + i, &c)) {
+            /* Ran past the pages the poller read: the record is incomplete. */
+            if(truncated) *truncated = true;
+            break;
+        }
         if(c == 0x00 || c == 0xFE) break;
-        if(out + 1 >= url_size) break;
+        if(out + 1 >= url_size) {
+            if(truncated) *truncated = true;
+            break;
+        }
         url[out++] = (char)c;
     }
     url[out] = '\0';
     return out > 0;
+}
+
+/* ---- Vendor identification ---------------------------------------------- */
+
+/* Only hosts confirmed from hardware belong here. A guessed entry would put a
+ * vendor's name on a tag that is not theirs. */
+static const TagTinkerNfcVendorEntry vendor_table[] = {
+    {"imagotag.com",
+     TagTinkerNfcVendorSesImagotag,
+     "VUSION tag",
+     "SES-imagotag uses\nradio, not IR"},
+};
+
+static char ascii_lower(char c) {
+    return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+}
+
+bool tagtinker_nfc_url_host(const char* url, char* host, size_t host_size) {
+    if(!url || !host || host_size == 0) return false;
+    host[0] = '\0';
+
+    /* The scheme prefix code is stripped before we ever see the body, so the
+     * host starts at byte 0 and ends at the first path, query or fragment. */
+    size_t end = 0;
+    while(url[end] && url[end] != '/' && url[end] != '?' && url[end] != '#') end++;
+
+    size_t start = 0;
+    for(size_t i = 0; i < end; i++) {
+        if(url[i] == '@') start = i + 1; /* drop userinfo */
+    }
+
+    /* Cut a ":port" suffix. */
+    size_t stop = end;
+    for(size_t i = start; i < end; i++) {
+        if(url[i] == ':') {
+            stop = i;
+            break;
+        }
+    }
+
+    if(stop <= start) return false;
+    if(stop - start + 1 > host_size) return false;
+
+    size_t out = 0;
+    bool has_dot = false;
+    for(size_t i = start; i < stop; i++) {
+        char c = ascii_lower(url[i]);
+        if(c == '.') has_dot = true;
+        host[out++] = c;
+    }
+    host[out] = '\0';
+
+    /* A prefix code of 0x00 means the body carries its own scheme, so it may
+     * not be a URL at all ("tel:..."). Requiring a dot keeps those out. */
+    return has_dot;
+}
+
+/* True when suffix matches the tail of host on a DNS label boundary. */
+static bool host_suffix_match(const char* host, const char* suffix) {
+    size_t hl = strlen(host);
+    size_t sl = strlen(suffix);
+    if(sl == 0 || hl < sl) return false;
+    if(strcmp(host + (hl - sl), suffix) != 0) return false;
+    /* Exact match, or the character before the suffix must be a label break. */
+    return (hl == sl) || (host[hl - sl - 1] == '.');
+}
+
+const TagTinkerNfcVendorEntry* tagtinker_nfc_identify_vendor(const char* url) {
+    if(!url) return NULL;
+
+    char host[TAGTINKER_NFC_HOST_LEN];
+    if(!tagtinker_nfc_url_host(url, host, sizeof(host))) return NULL;
+
+    for(size_t i = 0; i < COUNT_OF(vendor_table); i++) {
+        if(host_suffix_match(host, vendor_table[i].host_suffix)) return &vendor_table[i];
+    }
+    return NULL;
 }
 
 bool tagtinker_nfc_decode_url(const char* url, char barcode[18]) {
@@ -177,6 +266,10 @@ bool tagtinker_nfc_decode_barcode(const MfUltralightData* mfu_data, char barcode
     barcode[0] = '\0';
 
     char url[TAGTINKER_NFC_URL_LEN];
-    if(!tagtinker_nfc_extract_url(mfu_data, url, sizeof(url))) return false;
+    bool truncated = false;
+    if(!tagtinker_nfc_extract_url(mfu_data, url, sizeof(url), &truncated)) return false;
+    /* A cut-off URL has lost the tail the id lives in, so decoding it would be
+     * reading a fragment as if it were whole. */
+    if(truncated) return false;
     return tagtinker_nfc_decode_url(url, barcode);
 }
