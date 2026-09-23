@@ -156,6 +156,15 @@ static size_t oepl_read_file(const char* path, char* buf, size_t buf_size) {
     return n;
 }
 
+/* Find the first CR or LF in s, or NULL. (strpbrk is disabled in the Flipper
+ * firmware API, so we scan by hand.) */
+static char* oepl_find_eol(char* s) {
+    for(; *s; s++) {
+        if(*s == '\r' || *s == '\n') return s;
+    }
+    return NULL;
+}
+
 /* Copy a line's value (after '='), trimming trailing CR/LF/space, bounded. */
 static void oepl_copy_value(const char* src, char* dst, size_t dst_size) {
     size_t n = 0;
@@ -178,7 +187,7 @@ void tagtinker_oepl_config_load(TagTinkerOeplConfig* cfg) {
     /* Line-oriented: host=..., port=..., token=... */
     char* line = buf;
     while(line && *line) {
-        char* nl = strpbrk(line, "\r\n");
+        char* nl = oepl_find_eol(line);
         if(nl) *nl = '\0';
         while(*line == ' ') line++;
         if(*line && *line != '#') {
@@ -205,7 +214,7 @@ void tagtinker_oepl_allowlist_load(TagTinkerOeplAllowList* list) {
 
     char* line = buf;
     while(line && *line && list->count < TAGTINKER_OEPL_MAX_TAGS) {
-        char* nl = strpbrk(line, "\r\n");
+        char* nl = oepl_find_eol(line);
         if(nl) *nl = '\0';
         while(*line == ' ') line++;
         if(*line && *line != '#') {

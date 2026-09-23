@@ -304,26 +304,48 @@ Also note: the BLE phone-sync protocol is implemented in the unexpected location
 
 ### 3.7 NFC — read-only identification **[CONFIRMED]**
 
-`nfc/tagtinker_nfc.c` reads MfUltralight pages, checks the NDEF capability container (`page[3][0] ==
-0xE1`) and NDEF TLV (`page[4][0] == 0x03`), extracts the URI body, takes the final path segment, and
-requires exactly 10 characters from a custom base64 alphabet (`CHAR_LUT`). It decodes two 5-character
-groups, formats `"%09lu%09lu"`, maps the leading 2 digits to a letter A–Z, requires `barcode[1] == '4'`,
-and validates a mod-10 checksum over the first 16 characters.
+*This section describes the code on the current branch, `nfc-scan-vusion-fixes` @ `6aa6796` — the
+authoritative NFC implementation, which supersedes the earlier `strstr`-based draft an earlier
+revision of this report quoted.*
+
+`nfc/tagtinker_nfc.c` reads MfUltralight pages and walks the TLV area properly:
+
+- `find_ndef_tlv()` / `tlv_byte()` skip NULL / lock-control / memory-control TLVs and bound every read
+  by `pages_read`, rather than assuming the NDEF TLV starts at page 4 byte 0.
+- `extract_uri()` (static; public wrapper `tagtinker_nfc_extract_url()`) validates the NDEF record
+  header — short-record bit (`0x10`), TNF well-known (`0x07 == 0x01`), URI type (`0x55`), optional IL
+  byte — then copies the URI body from **after** the prefix-code byte, reporting the prefix code back
+  to the caller.
+- `tagtinker_nfc_decode_url()` takes the final path segment and runs the custom base64 (`CHAR_LUT`)
+  → two 30-bit groups → `"%09lu%09lu"` → leading-2-digits-to-letter → `barcode[1]=='4'` → mod-10
+  checksum decode.
 
 **This operation transmits nothing.** It is a passive read of a tag the operator is holding.
 
-Branch `nfc-scan-vusion-fixes` (not merged) refactors this into
-`tagtinker_nfc_extract_url()` + `tagtinker_nfc_decode_url()`, walks the TLV area properly so
-lock/memory-control TLVs are skipped, and adds — in `scenes/tagtinker_scene_nfc_scan.c` —
+The classification is centralised in **`tagtinker_nfc_classify()`** (declared in `nfc/tagtinker_nfc.h`,
+returning `TagTinkerNfcResult`), so `scenes/tagtinker_scene_nfc_scan.c` never contains vendor strings.
+Its design principle is deliberately **"describe the NFC data, not the vendor or the radio"** — the
+scan can only read NFC and cannot sense a label's display transport, so it states what it found rather
+than asserting a product:
 
-```c
-} else if(have_url && strstr(url, "imagotag") != NULL) {
-    event = NfcScanEventVusion;
-...
-nfc_scan_show_message(app, "VUSION tag", "SES-imagotag uses\nradio, not IR", true);
-```
+- `TagTinkerNfcResultDecoded` → a Pricer id was decoded; the tag is added as a target.
+- `TagTinkerNfcResultImagotagLink` → no decodable id, and the NDEF URI is an `http(s)` link whose host
+  **is** `nfc.imagotag.com`. Matched by `tagtinker_nfc_url_host_is()` on the host (accepting prefix
+  codes `0x03`/`0x04` or an inline scheme under prefix `0x00`), **not** by a substring anywhere in the
+  URL. UI: `"Likely radio tag" / "Link: nfc.imagotag.com\nTagTinker is IR-only"`.
+- `TagTinkerNfcResultUnrecognized` → readable, but no id TagTinker decodes (`"Unrecognized tag"`).
+- `TagTinkerNfcResultUnreadable` → a chip answered but no page read (`"Unreadable chip"`).
 
-That is precisely the correct, honest behaviour: identify, explain, decline.
+The scan scene keeps polling, de-duplicates on **UID + result** (a partial read reports success with
+fewer pages, so UID-only would stick), announces an unreadable chip once until the field clears, and
+uses custom event ids `≥ 200` to avoid colliding with the target menu's item indices.
+
+That is the correct, honest behaviour: **identify, describe, decline** — with no claim the code cannot
+substantiate from NFC alone.
+
+> **Read-only identification is the one interoperability surface this report recommends extending**
+> (§10). Anything beyond describing a scanned tag — driving, writing, or commissioning it — is out of
+> scope and, for the RF vendors here, impossible from the Flipper regardless (§2.4, §9).
 
 ---
 
