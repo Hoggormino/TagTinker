@@ -1,0 +1,38 @@
+# OpenEPaperLink module host unit test.
+#
+# Compiles the real oepl/tagtinker_oepl.c off-device against the stub headers in
+# test/stubs and runs test/oepl_test.c. Needs only a C compiler (no Flipper SDK,
+# no hardware), so it is fast and a hard gate on the OEPL logic.
+#
+# This is a standalone workflow because the test/ harness and the main build.yml
+# currently live on different branches. Once they share a branch, this job can
+# be lifted verbatim into build.yml as an additional `oepl-test` job.
+
+name: OEPL test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oepl-test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  oepl-test:
+    name: OEPL host unit test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CC: gcc
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run OEPL host tests
+        run: ./test/run_oepl_test.sh
