@@ -5,6 +5,7 @@
 #   worker - Cloudflare Worker (cloud-plugins/) typecheck + wrangler dry-run bundle
 #   esp32  - ESP32-S2 WiFi devboard firmware via the ESP-IDF v5.2.8 docker image
 #   web    - syntax check of the inline JavaScript in web-image-prep/index.html
+#   oepl   - OpenEPaperLink module host unit test (test/, plain gcc, no SDK)
 #   lint   - `ufbt lint` (clang-format), ADVISORY ONLY - never fails the run
 #
 # There are deliberately NO `paths:` filters: esp32-wifi-fw/shared/tt_wifi_proto.h
@@ -260,6 +261,25 @@ jobs:
           console.log(`${checked} inline script(s) checked, ${failed} failed`);
           process.exit(failed ? 1 : 0);
           JS
+
+  # ---------------------------------------------------------------------------
+  # OpenEPaperLink module host unit test (test/, plain gcc, no Flipper SDK)
+  # ---------------------------------------------------------------------------
+  # Compiles the real oepl/tagtinker_oepl.c against the stub furi/storage
+  # headers in test/stubs and runs test/oepl_test.c. Needs only a C compiler,
+  # so it takes seconds and is a hard gate on the OEPL request/allow-list logic.
+  oepl:
+    name: OEPL host unit test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CC: gcc
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run OEPL host tests
+        run: ./test/run_oepl_test.sh
 
   # ---------------------------------------------------------------------------
   # clang-format lint - ADVISORY ONLY
