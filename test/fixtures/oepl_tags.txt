@@ -1,0 +1,6 @@
+# owned tags, one MAC per line
+01:97:e5:cb:3b:38
+00000197E5CB3B38
+aa-bb-cc-dd-ee-ff
+GARBAGE_NOT_HEX
+01:97:e5:cb:3b:38
