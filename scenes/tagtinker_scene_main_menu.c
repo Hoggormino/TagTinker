@@ -7,6 +7,7 @@
 enum {
     MainMenuBroadcast,
     MainMenuTargetESL,
+    MainMenuOepl,
     MainMenuSettings,
     MainMenuAbout,
 };
@@ -24,6 +25,7 @@ void tagtinker_scene_main_menu_on_enter(void* ctx) {
 
     submenu_add_item(app->submenu, "Broadcast Payloads", MainMenuBroadcast, main_menu_cb, app);
     submenu_add_item(app->submenu, "Targeted Payloads", MainMenuTargetESL, main_menu_cb, app);
+    submenu_add_item(app->submenu, "OpenEPaperLink", MainMenuOepl, main_menu_cb, app);
     submenu_add_item(app->submenu, "Settings", MainMenuSettings, main_menu_cb, app);
     submenu_add_item(app->submenu, "About", MainMenuAbout, main_menu_cb, app);
 
@@ -46,6 +48,9 @@ bool tagtinker_scene_main_menu_on_event(void* ctx, SceneManagerEvent event) {
         return true;
     case MainMenuTargetESL:
         scene_manager_next_scene(app->scene_manager, TagTinkerSceneTargetMenu);
+        return true;
+    case MainMenuOepl:
+        scene_manager_next_scene(app->scene_manager, TagTinkerSceneOepl);
         return true;
     case MainMenuSettings:
         scene_manager_next_scene(app->scene_manager, TagTinkerSceneSettings);

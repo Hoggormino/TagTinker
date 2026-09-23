@@ -40,5 +40,7 @@ App(
         "scenes/tagtinker_scene_wifi_plugins.c",
         "scenes/tagtinker_scene_wifi_setup.c",
         "scenes/tagtinker_scene_wifi_run.c",
+        "oepl/tagtinker_oepl.c",
+        "scenes/tagtinker_scene_oepl.c",
     ],
 )
