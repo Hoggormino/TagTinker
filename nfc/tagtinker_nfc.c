@@ -200,6 +200,28 @@ bool tagtinker_nfc_url_host_is(const char* url, const char* host) {
     return next == '\0' || next == '/' || next == ':' || next == '?' || next == '#';
 }
 
+bool tagtinker_nfc_url_host(const char* url, char* out, size_t out_size) {
+    if(!out || out_size == 0) return false;
+    out[0] = '\0';
+    if(!url) return false;
+
+    /* Same scheme rule as tagtinker_nfc_url_host_is: a "://" before the first
+     * '/', '?' or '#' is a scheme and is skipped. */
+    const char* scheme_end = strstr(url, "://");
+    if(scheme_end && scheme_end < url + strcspn(url, "/?#")) url = scheme_end + 3;
+
+    /* The host runs up to the first '/', ':', '?' or '#'. */
+    size_t host_len = strcspn(url, "/:?#");
+
+    /* Hosts come off the tag, so bound what we keep for display. */
+    if(host_len > TAGTINKER_NFC_HOST_LEN) host_len = TAGTINKER_NFC_HOST_LEN;
+    if(host_len > out_size - 1) host_len = out_size - 1;
+
+    memcpy(out, url, host_len);
+    out[host_len] = '\0';
+    return host_len > 0;
+}
+
 bool tagtinker_nfc_decode_barcode(const MfUltralightData* mfu_data, char barcode[18]) {
     if(!mfu_data || !barcode) return false;
     barcode[0] = '\0';
