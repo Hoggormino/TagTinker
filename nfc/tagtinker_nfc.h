@@ -16,6 +16,10 @@
 /* Longest NDEF URI body (scheme prefix excluded) we keep. */
 #define TAGTINKER_NFC_URL_LEN 96
 
+/* Longest link host we keep for display. Hosts come off the tag, so this is a
+ * display bound as much as a buffer size. */
+#define TAGTINKER_NFC_HOST_LEN 32
+
 /* Extract the NDEF URI body (without the "https://" style prefix) from a tag.
  * Walks the TLV area so lock/memory-control TLVs before the NDEF TLV are
  * skipped, and reads as many pages as the record actually spans. */
