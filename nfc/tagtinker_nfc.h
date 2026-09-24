@@ -34,6 +34,13 @@ bool tagtinker_nfc_decode_url(const char* url, char barcode[18]);
  * the real host. */
 bool tagtinker_nfc_url_host_is(const char* url, const char* host);
 
+/* Copy the URL's host label into `out` (always NUL-terminated), stripping any
+ * scheme and stopping at the first '/', ':', '?' or '#'. The host is bounded to
+ * TAGTINKER_NFC_HOST_LEN characters because it comes off the tag; size `out` as
+ * char[TAGTINKER_NFC_HOST_LEN + 1] to hold it in full. Returns false (and
+ * out="") on bad args or an empty host. */
+bool tagtinker_nfc_url_host(const char* url, char* out, size_t out_size);
+
 /* Convenience: extract the URL from the tag and decode it in one call. */
 bool tagtinker_nfc_decode_barcode(const MfUltralightData* mfu_data, char barcode[18]);
 

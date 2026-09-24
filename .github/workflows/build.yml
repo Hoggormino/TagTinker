@@ -6,6 +6,8 @@
 #   esp32  - ESP32-S2 WiFi devboard firmware via the ESP-IDF v5.2.8 docker image
 #   web    - syntax check of the inline JavaScript in web-image-prep/index.html
 #   oepl   - OpenEPaperLink module host unit test (test/, plain gcc, no SDK)
+#   proto  - protocol geometry/layout helper host unit test (test/, plain gcc)
+#   nfc    - NFC URL-host matcher host unit test (test/, plain gcc, no SDK)
 #   lint   - `ufbt lint` (clang-format), ADVISORY ONLY - never fails the run
 #
 # There are deliberately NO `paths:` filters: esp32-wifi-fw/shared/tt_wifi_proto.h
@@ -280,6 +282,45 @@ jobs:
 
       - name: Run OEPL host tests
         run: ./test/run_oepl_test.sh
+
+  # ---------------------------------------------------------------------------
+  # Protocol module host unit test (test/, plain gcc, no Flipper SDK)
+  # ---------------------------------------------------------------------------
+  # Compiles test/proto_test.c against protocol/tagtinker_proto.h and checks the
+  # pure geometry/layout helpers (wire<->glass mapping, page resolution, w/h
+  # swap, glass sizing). No stubs needed: the header is plain C. A hard gate on
+  # the Color 2.6 coordinate transforms.
+  proto:
+    name: Protocol host unit test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CC: gcc
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run protocol host tests
+        run: ./test/run_proto_test.sh
+
+  # ---------------------------------------------------------------------------
+  # NFC module host unit test (test/, plain gcc, no Flipper SDK)
+  # ---------------------------------------------------------------------------
+  # Compiles the real nfc/tagtinker_nfc.c against a minimal mf_ultralight stub
+  # in test/stubs and runs test/nfc_test.c. Exercises the URL-host matcher that
+  # classifies tag links. Needs only a C compiler.
+  nfc:
+    name: NFC host unit test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CC: gcc
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run NFC host tests
+        run: ./test/run_nfc_test.sh
 
   # ---------------------------------------------------------------------------
   # clang-format lint - ADVISORY ONLY
